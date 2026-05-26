@@ -34,38 +34,34 @@ jobs:
           if git rev-parse "$AFTER^2" > /dev/null 2>&1; then
             echo "Normal merge commit detected"
 
-            # Get all commits that came in via the merged branch
             MERGE_BASE=$(git merge-base "$AFTER^1" "$AFTER^2")
 
-            # Sum AI lines from commit messages in the merged branch
             TOTAL_AI=$(git log "$MERGE_BASE..$AFTER^2" --pretty=%B \
-              | grep "^AI-Lines-Of-Code:" \
+              | grep "^AI-Lines-Of-Code:" || true \
               | awk -F': ' '{sum+=$2} END {print sum+0}')
 
-            # Total lines added from the merged branch
             TOTAL_ADDED=$(git diff --numstat "$MERGE_BASE..$AFTER^2" \
               | awk '{add+=$1} END {print add+0}')
 
-          # ── Case 2: Squash merge or regular push (single parent) ─────────
+          # ── Case 2: First push ────────────────────────────────────────────
           elif [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
             echo "First push detected"
 
-            TOTAL_ADDED=$(git ls-files | xargs -I{} git show "$AFTER:{}" 2>/dev/null | wc -l || echo 0)
+            TOTAL_ADDED=$(git ls-files | xargs -I{} git show "$AFTER:{}" 2>/dev/null | wc -l || true)
 
             TOTAL_AI=$(git log --pretty=%B "$AFTER" \
-              | grep "^AI-Lines-Of-Code:" \
+              | grep "^AI-Lines-Of-Code:" || true \
               | awk -F': ' '{sum+=$2} END {print sum+0}')
 
+          # ── Case 3: Squash merge or direct push ───────────────────────────
           else
             echo "Squash merge or direct push detected"
 
-            # Total lines added
             TOTAL_ADDED=$(git diff --numstat "$BEFORE..$AFTER" \
               | awk '{add+=$1} END {print add+0}')
 
-            # Sum AI-Lines-Of-Code from all commit messages in range
             TOTAL_AI=$(git log "$BEFORE..$AFTER" --pretty=%B \
-              | grep "^AI-Lines-Of-Code:" \
+              | grep "^AI-Lines-Of-Code:" || true \
               | awk -F': ' '{sum+=$2} END {print sum+0}')
           fi
 
