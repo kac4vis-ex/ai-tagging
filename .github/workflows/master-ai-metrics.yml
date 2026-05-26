@@ -28,46 +28,46 @@ jobs:
           AFTER="${{ github.sha }}"
 
           echo "Processing push range: $BEFORE..$AFTER"
+          echo "Commit type check..."
 
-          # Detect merge commit (has 2 parents)
+          # ── Case 1: Normal merge commit (has 2 parents) ──────────────────
           if git rev-parse "$AFTER^2" > /dev/null 2>&1; then
-            echo "Merge commit detected — diffing merged branch changes"
-            DIFF_BASE=$(git merge-base "$AFTER^1" "$AFTER^2")
-            TOTAL_ADDED=$(git diff --numstat "$DIFF_BASE..$AFTER^2" | awk '{add+=$1} END {print add+0}')
-            mapfile -t changed_files < <(git diff --name-only "$DIFF_BASE..$AFTER^2")
+            echo "Normal merge commit detected"
 
+            # Get all commits that came in via the merged branch
+            MERGE_BASE=$(git merge-base "$AFTER^1" "$AFTER^2")
+
+            # Sum AI lines from commit messages in the merged branch
+            TOTAL_AI=$(git log "$MERGE_BASE..$AFTER^2" --pretty=%B \
+              | grep "^AI-Lines-Of-Code:" \
+              | awk -F': ' '{sum+=$2} END {print sum+0}')
+
+            # Total lines added from the merged branch
+            TOTAL_ADDED=$(git diff --numstat "$MERGE_BASE..$AFTER^2" \
+              | awk '{add+=$1} END {print add+0}')
+
+          # ── Case 2: Squash merge or regular push (single parent) ─────────
           elif [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
-            # First push to branch
+            echo "First push detected"
+
             TOTAL_ADDED=$(git ls-files | xargs -I{} git show "$AFTER:{}" 2>/dev/null | wc -l || echo 0)
-            mapfile -t changed_files < <(git ls-files)
+
+            TOTAL_AI=$(git log --pretty=%B "$AFTER" \
+              | grep "^AI-Lines-Of-Code:" \
+              | awk -F': ' '{sum+=$2} END {print sum+0}')
 
           else
-            # Regular push
-            TOTAL_ADDED=$(git diff --numstat "$BEFORE..$AFTER" | awk '{add+=$1} END {print add+0}')
-            mapfile -t changed_files < <(git diff --name-only "$BEFORE..$AFTER")
+            echo "Squash merge or direct push detected"
+
+            # Total lines added
+            TOTAL_ADDED=$(git diff --numstat "$BEFORE..$AFTER" \
+              | awk '{add+=$1} END {print add+0}')
+
+            # Sum AI-Lines-Of-Code from all commit messages in range
+            TOTAL_AI=$(git log "$BEFORE..$AFTER" --pretty=%B \
+              | grep "^AI-Lines-Of-Code:" \
+              | awk -F': ' '{sum+=$2} END {print sum+0}')
           fi
-
-          TOTAL_AI=0
-
-          for f in "${changed_files[@]}"; do
-            [ -z "$f" ] && continue
-
-            # Skip files that don't exist at AFTER (deleted files)
-            if ! git ls-tree -r --name-only "$AFTER" | grep -qx "$f"; then
-              continue
-            fi
-
-            # Count lines between AI markers
-            ai_count=$(git show "$AFTER:$f" 2>/dev/null \
-              | awk '
-                /\/\/ START OF AI GENERATED/ { inside=1; next }
-                /\/\/ END OF AI GENERATED/   { inside=0; next }
-                inside                        { count++ }
-                END                           { print count+0 }
-              ')
-
-            TOTAL_AI=$((TOTAL_AI + ai_count))
-          done
 
           TOTAL_HUMAN=$((TOTAL_ADDED - TOTAL_AI))
           if [ "$TOTAL_HUMAN" -lt 0 ]; then TOTAL_HUMAN=0; fi
