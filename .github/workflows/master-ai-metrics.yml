@@ -29,12 +29,20 @@ jobs:
 
           echo "Processing push range: $BEFORE..$AFTER"
 
-          # Determine changed files and total added lines
-          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
-            # First push to branch: count all lines at AFTER
+          # Detect merge commit (has 2 parents)
+          if git rev-parse "$AFTER^2" > /dev/null 2>&1; then
+            echo "Merge commit detected — diffing merged branch changes"
+            DIFF_BASE=$(git merge-base "$AFTER^1" "$AFTER^2")
+            TOTAL_ADDED=$(git diff --numstat "$DIFF_BASE..$AFTER^2" | awk '{add+=$1} END {print add+0}')
+            mapfile -t changed_files < <(git diff --name-only "$DIFF_BASE..$AFTER^2")
+
+          elif [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            # First push to branch
             TOTAL_ADDED=$(git ls-files | xargs -I{} git show "$AFTER:{}" 2>/dev/null | wc -l || echo 0)
             mapfile -t changed_files < <(git ls-files)
+
           else
+            # Regular push
             TOTAL_ADDED=$(git diff --numstat "$BEFORE..$AFTER" | awk '{add+=$1} END {print add+0}')
             mapfile -t changed_files < <(git diff --name-only "$BEFORE..$AFTER")
           fi
@@ -102,7 +110,6 @@ jobs:
               '_This issue is updated automatically by CI on every push to `main`._'
             ].join('\n');
 
-            // Find existing open issue by title and update, or create new
             const issues   = await github.rest.issues.listForRepo({ owner, repo, state: 'open', per_page: 100 });
             const existing = issues.data.find(i => i.title === title);
 
