@@ -63,7 +63,9 @@ jobs:
             TOTAL_ADDED=$(git diff --numstat "$BEFORE..$AFTER" \
               | awk '{add+=$1} END {print add+0}')
 
-            TOTAL_AI=$(git log "$BEFORE..$AFTER" --pretty=%B \
+            # Only read the single commit at AFTER, not the whole range
+            # This prevents old commits from being counted again
+            TOTAL_AI=$(git log -1 "$AFTER" --pretty=%B \
               | awk -F': ' '/^AI-Lines-Of-Code:/{sum+=$2} END {print sum+0}')
           fi
 
