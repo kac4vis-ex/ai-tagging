@@ -1,0 +1,115 @@
+name: AI Code Metrics Tracker
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: 'Runner to use'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  calc-and-comment:
+    runs-on: ${{ inputs.runner }}
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Calculate AI and Human Lines in PR diff
+        id: calc
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+
+          echo "Comparing base=$BASE to head=$HEAD"
+
+          # Total added lines in this PR
+          TOTAL_ADDED=$(git diff --numstat "$BASE..$HEAD" | awk '{add+=$1} END {print add+0}')
+
+          # Get list of changed files as an array
+          mapfile -t changed_files < <(git diff --name-only "$BASE..$HEAD")
+
+          TOTAL_AI=0
+
+          for f in "${changed_files[@]}"; do
+            [ -z "$f" ] && continue
+
+            # Skip files deleted in this PR (not present at HEAD)
+            if ! git ls-tree -r --name-only "$HEAD" | grep -qx "$f"; then
+              continue
+            fi
+
+            # Count lines between AI markers
+            ai_count=$(git show "$HEAD:$f" 2>/dev/null \
+              | awk '
+                /\/\/ START OF AI GENERATED/ { inside=1; next }
+                /\/\/ END OF AI GENERATED/   { inside=0; next }
+                inside                        { count++ }
+                END                           { print count+0 }
+              ')
+
+            TOTAL_AI=$((TOTAL_AI + ai_count))
+          done
+
+          TOTAL_HUMAN=$((TOTAL_ADDED - TOTAL_AI))
+          if [ "$TOTAL_HUMAN" -lt 0 ]; then TOTAL_HUMAN=0; fi
+
+          PCT=$(awk "BEGIN { printf \"%.1f\", ($TOTAL_ADDED > 0 ? ($TOTAL_AI / $TOTAL_ADDED) * 100 : 0) }")
+
+          echo "AI_LINES=$TOTAL_AI"       >> "$GITHUB_OUTPUT"
+          echo "TOTAL_ADDED=$TOTAL_ADDED" >> "$GITHUB_OUTPUT"
+          echo "HUMAN_LINES=$TOTAL_HUMAN" >> "$GITHUB_OUTPUT"
+          echo "PCT=$PCT"                 >> "$GITHUB_OUTPUT"
+
+          echo "Computed: AI=$TOTAL_AI, Added=$TOTAL_ADDED, Human=$TOTAL_HUMAN, PCT=${PCT}%"
+
+      - name: Post or update PR comment with AI metrics
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const owner  = context.repo.owner;
+            const repo   = context.repo.repo;
+            const pr     = context.payload.pull_request.number;
+
+            const ai     = parseInt('${{ steps.calc.outputs.AI_LINES }}')    || 0;
+            const added  = parseInt('${{ steps.calc.outputs.TOTAL_ADDED }}') || 0;
+            const human  = parseInt('${{ steps.calc.outputs.HUMAN_LINES }}') || 0;
+            const pct    = '${{ steps.calc.outputs.PCT }}' || '0.0';
+
+            const marker = '<!-- ai-metrics-comment -->';
+            const body   = [
+              marker,
+              '## 🤖 AI Code Metrics',
+              '',
+              `| Metric | Value |`,
+              `|--------|-------|`,
+              `| Total lines added | ${added} |`,
+              `| AI-generated lines | ${ai} (${pct}%) |`,
+              `| Human-written lines | ${human} |`,
+              '',
+            ].join('\n');
+
+            // Find existing bot comment by marker and update, or post new
+            const comments  = await github.rest.issues.listComments({ owner, repo, issue_number: pr, per_page: 100 });
+            const existing  = comments.data.find(c => c.body && c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+              console.log(`Updated comment #${existing.id}`);
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number: pr, body });
+              console.log('Created new comment');
+            }

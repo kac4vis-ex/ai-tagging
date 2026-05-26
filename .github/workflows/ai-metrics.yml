@@ -1,0 +1,16 @@
+name: Run AI Code Metrics on Pull Request
+
+permissions:
+  contents: read
+  issues: write
+
+on:
+  pull_request:
+    # Run when the branch is updated or the PR is marked ready — avoids running on initial open
+    types: [synchronize, ready_for_review, reopened]
+
+jobs:
+  invoke-reusable:
+    uses: ./.github/workflows/ai-metrics-reusable.yml
+    with:
+      runner: 'ubuntu-latest'
